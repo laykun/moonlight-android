@@ -54,6 +54,7 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
     public static final int VK_BACK_QUOTE = 192;
     public static final int VK_QUOTE = 222;
     public static final int VK_PAUSE = 19;
+    public static final int VK_META = 91;
 
     private static class KeyboardMapping {
         private final InputDevice device;
@@ -205,7 +206,9 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
             case KeyEvent.KEYCODE_EQUALS:
                 translated = 0xbb;
                 break;
-                
+
+            // Galaxy Tab keyboards bind escape key to Menu
+            case KeyEvent.KEYCODE_MENU:
             case KeyEvent.KEYCODE_ESCAPE:
                 translated = VK_ESCAPE;
                 break;
@@ -353,6 +356,10 @@ public class KeyboardTranslator implements InputManager.InputDeviceListener {
 
             case KeyEvent.KEYCODE_STAR:
                 translated = 8 + VK_0;
+                break;
+
+            case KeyEvent.KEYCODE_LANGUAGE_SWITCH:
+                translated = VK_META;
                 break;
 
             default:
