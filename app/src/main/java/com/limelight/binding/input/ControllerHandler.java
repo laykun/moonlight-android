@@ -214,7 +214,11 @@ public class ControllerHandler implements InputManager.InputDeviceListener, UsbD
     }
 
     private static boolean hasGamepadButtons(InputDevice device) {
-        return (device.getSources() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD;
+        return (device.getSources() & InputDevice.SOURCE_GAMEPAD) == InputDevice.SOURCE_GAMEPAD
+                // Galaxy Tab Book cover keyboard can report itself as Gamepad, when pressing
+                // Arrow Keys this causes them to be consumed as DPAD input instead of arrow input
+                // for remote desktop situations.
+                && (device.getSources() & InputDevice.SOURCE_KEYBOARD) != InputDevice.SOURCE_KEYBOARD;
     }
 
     public static boolean isGameControllerDevice(InputDevice device) {
