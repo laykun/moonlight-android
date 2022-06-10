@@ -106,6 +106,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
 
     private static final int THREE_FINGER_TAP_THRESHOLD = 300;
 
+    // Galaxy Tab keyboard cover flags
+    private static final int FLAG_TOUCHPAD_TWO_FINGER_SCROLL_DOWN = 0x10000040;
+    private static final int FLAG_TOUCHPAD_TWO_FINGER_SCROLL = 0x10000040;
+
     private ControllerHandler controllerHandler;
     private KeyboardTranslator keyboardTranslator;
     private VirtualController virtualController;
@@ -133,6 +137,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     private long lastAbsTouchDownTime = 0;
     private float lastAbsTouchUpX, lastAbsTouchUpY;
     private float lastAbsTouchDownX, lastAbsTouchDownY;
+    private float lastMousePositionX, lastMousePositionY;
+    private float lastTwoFingerScrollPositionX, lastTwoFingerScrollPositionY;
 
     private boolean isHidingOverlays;
     private TextView notificationOverlayView;
@@ -1245,7 +1251,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                  eventSource == InputDevice.SOURCE_MOUSE_RELATIVE)
         {
             // This case is for mice and non-finger touch devices
-            if (eventSource == InputDevice.SOURCE_MOUSE ||
+            if ((eventSource & InputDevice.SOURCE_MOUSE) != 0 ||
                     (eventSource & InputDevice.SOURCE_CLASS_POSITION) != 0 || // SOURCE_TOUCHPAD
                     eventSource == InputDevice.SOURCE_MOUSE_RELATIVE ||
                     (event.getPointerCount() >= 1 &&
@@ -1307,7 +1313,34 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 }
                 else if (view != null) {
                     // Otherwise send absolute position based on the view for SOURCE_CLASS_POINTER
-                    updateMousePosition(view, event);
+                    if ((event.getFlags() != FLAG_TOUCHPAD_TWO_FINGER_SCROLL)) {
+                        updateMousePosition(view, event);
+                    }
+                }
+
+                if ((event.getFlags() == FLAG_TOUCHPAD_TWO_FINGER_SCROLL)
+                && event.getAction() == MotionEvent.ACTION_MOVE) {
+                    float accumX = 0;
+                    float accumY = 0;
+
+                    float previousValueX = lastTwoFingerScrollPositionX;
+                    float previousValueY = lastTwoFingerScrollPositionY;
+                    for (int i = 0; i < event.getHistorySize(); i++) {
+                        accumX += event.getHistoricalX(i) - previousValueX;
+                        accumY += event.getHistoricalY(i) - previousValueY;
+
+                        previousValueX = event.getHistoricalX(0);
+                        previousValueY = event.getHistoricalY(0);
+                    }
+
+                    accumY += event.getY(0) - previousValueY;
+
+                    conn.sendMouseHighResScroll((short)(accumY * 3));
+
+                    lastTwoFingerScrollPositionY = event.getY(0);
+                    lastTwoFingerScrollPositionX = event.getX(0);
+
+                    return true;
                 }
 
                 if (event.getActionMasked() == MotionEvent.ACTION_SCROLL) {
@@ -1364,17 +1397,26 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     }
                 }
 
-                // Handle stylus presses
-                if (event.getPointerCount() == 1 && event.getActionIndex() == 0) {
-                    if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
+                // Handle stylus and touchpad (Galaxy Tab) presses
+                if (event.getPointerCount() == 1 && event.getActionIndex() == 0 && (eventSource & InputDevice.SOURCE_TOUCHPAD) <= 0) {
+                    if (event.getActionMasked() == MotionEvent.ACTION_DOWN
+                        && (event.getFlags() & FLAG_TOUCHPAD_TWO_FINGER_SCROLL_DOWN) <= 0) {
+                        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
+                                // Galaxy Tab devices report Touchpad tap-to-click events as finger
+                                // taps, but also have a cursor
+                                || (event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                                && (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) <= 0)) {
                             lastAbsTouchDownTime = SystemClock.uptimeMillis();
                             lastAbsTouchDownX = event.getX(0);
                             lastAbsTouchDownY = event.getY(0);
 
                             // Stylus is left click
                             conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_LEFT);
-                        } else if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
+                        } else if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                                // Galaxy Tab devices report Touchpad tap-to-click events as finger
+                                // taps, but also have a cursor
+                                || (event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                                && (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) > 0)) {
                             lastAbsTouchDownTime = SystemClock.uptimeMillis();
                             lastAbsTouchDownX = event.getX(0);
                             lastAbsTouchDownY = event.getY(0);
@@ -1384,14 +1426,21 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                         }
                     }
                     else if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
-                        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS) {
+                        if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
+                                // Galaxy Tab devices report Touchpad tap-to-click events as finger
+                                // taps, but also have a cursor
+                                || (event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                                && (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) <= 0)) {
                             lastAbsTouchUpTime = SystemClock.uptimeMillis();
                             lastAbsTouchUpX = event.getX(0);
                             lastAbsTouchUpY = event.getY(0);
 
                             // Stylus is left click
                             conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
-                        } else if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER) {
+                        } else if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
+                                // Galaxy Tab devices report Touchpad events as finger taps, but also have a cursor
+                                || (event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
+                                && (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) > 0)) {
                             lastAbsTouchUpTime = SystemClock.uptimeMillis();
                             lastAbsTouchUpX = event.getX(0);
                             lastAbsTouchUpY = event.getY(0);
@@ -1399,6 +1448,21 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             // Eraser is right click
                             conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_RIGHT);
                         }
+                    }
+                    else if (event.getActionMasked() == MotionEvent.ACTION_DOWN
+                            && event.getFlags() == FLAG_TOUCHPAD_TWO_FINGER_SCROLL_DOWN) {
+                        //for (int i = 0; i < touchContextMap.length; i++) {
+                            //TouchContext context = getTouchContext(i);
+                            //context.touchUpEvent((int)lastMousePositionX, (int)lastMousePositionY + i * 10);
+                        //}
+
+                        lastTwoFingerScrollPositionX = lastMousePositionX;
+                        lastTwoFingerScrollPositionY = lastMousePositionY;
+
+                       /* for (int i = 0; i < touchContextMap.length; i++) {
+                            TouchContext context = getTouchContext(i);
+                            context.touchDownEvent((int)event.getX(0), (int)event.getX(0) + i * 10, true);
+                        }*/
                     }
                 }
 
@@ -1575,6 +1639,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         // reaching the sides of the screen.
         eventX = Math.min(Math.max(eventX, 0), view.getWidth());
         eventY = Math.min(Math.max(eventY, 0), view.getHeight());
+
+        lastMousePositionX = eventX;
+        lastMousePositionY = eventY;
 
         conn.sendMousePosition((short)eventX, (short)eventY, (short)view.getWidth(), (short)view.getHeight());
     }
