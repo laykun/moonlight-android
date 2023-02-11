@@ -1432,6 +1432,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         }
 
         int eventSource = event.getSource();
+        boolean bIsTwoFingerScroll = event.getFlags() == FLAG_TOUCHPAD_TWO_FINGER_SCROLL;
+
         if ((eventSource & InputDevice.SOURCE_CLASS_JOYSTICK) != 0) {
             if (controllerHandler.handleMotionEvent(event)) {
                 return true;
@@ -1457,20 +1459,22 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 // The DeX touchpad on the Fold 4 sends proper right click events using BUTTON_SECONDARY,
                 // but doesn't send BUTTON_PRIMARY for a regular click. Instead it sends ACTION_DOWN/UP,
                 // so we need to fix that up to look like a sane input event to process it correctly.
-                if (eventSource == 12290) {
+
+                // THIS BREAKS TAB S8 ULTRA AND S7+
+                if (eventSource == 12290 && !bIsTwoFingerScroll) {
                     if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
-                        buttonState |= MotionEvent.BUTTON_PRIMARY;
+                        //buttonState |= MotionEvent.BUTTON_PRIMARY;
                     }
                     else if (event.getAction() == MotionEvent.ACTION_UP) {
-                        buttonState &= ~MotionEvent.BUTTON_PRIMARY;
+                        //buttonState &= ~MotionEvent.BUTTON_PRIMARY;
                     }
                     else {
                         // We may be faking the primary button down from a previous event,
                         // so be sure to add that bit back into the button state.
-                        buttonState |= (lastButtonState & MotionEvent.BUTTON_PRIMARY);
+                        //buttonState |= (lastButtonState & MotionEvent.BUTTON_PRIMARY);
                     }
 
-                    changedButtons = buttonState ^ lastButtonState;
+                    //changedButtons = buttonState ^ lastButtonState;
                 }
 
                 // Ignore mouse input if we're not capturing from our input source
@@ -1610,9 +1614,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 }
 
                 // Handle stylus and touchpad (Galaxy Tab) presses
-                if (event.getPointerCount() == 1 && event.getActionIndex() == 0 && (eventSource & InputDevice.SOURCE_TOUCHPAD) <= 0) {
+                if (event.getPointerCount() == 1 && event.getActionIndex() == 0
+                        && (eventSource & InputDevice.SOURCE_TOUCHPAD) <= 0) {
                     if (event.getActionMasked() == MotionEvent.ACTION_DOWN
-                        && (event.getFlags() & FLAG_TOUCHPAD_TWO_FINGER_SCROLL_DOWN) <= 0) {
+                            && (event.getFlags() & FLAG_TOUCHPAD_TWO_FINGER_SCROLL_DOWN) <= 0) {
                         if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
                                 // Galaxy Tab devices report Touchpad tap-to-click events as finger
                                 // taps, but also have a cursor
@@ -1637,7 +1642,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             conn.sendMouseButtonDown(MouseButtonPacket.BUTTON_RIGHT);
                         }
                     }
-                    else if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                    else if (event.getActionMasked() == MotionEvent.ACTION_UP
+                            || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
                         if (event.getToolType(0) == MotionEvent.TOOL_TYPE_STYLUS
                                 // Galaxy Tab devices report Touchpad tap-to-click events as finger
                                 // taps, but also have a cursor
@@ -1650,7 +1656,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                             // Stylus is left click
                             conn.sendMouseButtonUp(MouseButtonPacket.BUTTON_LEFT);
                         } else if (event.getToolType(0) == MotionEvent.TOOL_TYPE_ERASER
-                                // Galaxy Tab devices report Touchpad events as finger taps, but also have a cursor
+                                // Galaxy Tab devices report Touchpad events as finger
+                                // taps, but also have a cursor
                                 || (event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER
                                 && (event.getButtonState() & MotionEvent.BUTTON_SECONDARY) > 0)) {
                             lastAbsTouchUpTime = event.getEventTime();
