@@ -1534,29 +1534,42 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     }
                 }
 
-                if ((event.getFlags() == FLAG_TOUCHPAD_TWO_FINGER_SCROLL)
-                && event.getAction() == MotionEvent.ACTION_MOVE) {
-                    float accumX = 0;
-                    float accumY = 0;
+                if (event.getFlags() == FLAG_TOUCHPAD_TWO_FINGER_SCROLL)
+                {
+                    if(event.getAction() == MotionEvent.ACTION_MOVE)
+                    {
+                        float accumX = 0;
+                        float accumY = 0;
 
-                    float previousValueX = lastTwoFingerScrollPositionX;
-                    float previousValueY = lastTwoFingerScrollPositionY;
-                    for (int i = 0; i < event.getHistorySize(); i++) {
-                        accumX += event.getHistoricalX(i) - previousValueX;
-                        accumY += event.getHistoricalY(i) - previousValueY;
+                        float previousValueX = lastTwoFingerScrollPositionX;
+                        float previousValueY = lastTwoFingerScrollPositionY;
+                        for (int i = 0; i < event.getHistorySize(); i++) {
+                            accumX += event.getHistoricalX(i) - previousValueX;
+                            accumY += event.getHistoricalY(i) - previousValueY;
 
-                        previousValueX = event.getHistoricalX(0);
-                        previousValueY = event.getHistoricalY(0);
+                            previousValueX = event.getHistoricalX(0);
+                            previousValueY = event.getHistoricalY(0);
+                        }
+
+                        accumY += event.getY(0) - previousValueY;
+
+                        conn.sendMouseHighResScroll((short)(accumY * 3));
+
+                        lastTwoFingerScrollPositionY = event.getY(0);
+                        lastTwoFingerScrollPositionX = event.getX(0);
+
+                        return true;
                     }
+                    else
+                    {
+                        // Reset last two finger scroll position so we don't elastic band back up
+                        lastTwoFingerScrollPositionX = lastMousePositionX;
+                        lastTwoFingerScrollPositionY = lastMousePositionY;
 
-                    accumY += event.getY(0) - previousValueY;
-
-                    conn.sendMouseHighResScroll((short)(accumY * 3));
-
-                    lastTwoFingerScrollPositionY = event.getY(0);
-                    lastTwoFingerScrollPositionX = event.getX(0);
-
-                    return true;
+                        // To stop clicking actions happening, simply discard this motion even,
+                        // stops text selection and moving on galaxy tab
+                        return true;
+                    }
                 }
 
                 if (event.getActionMasked() == MotionEvent.ACTION_SCROLL) {
