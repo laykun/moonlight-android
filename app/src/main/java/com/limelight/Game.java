@@ -1572,7 +1572,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                         float previousValueX = lastTwoFingerScrollPositionX;
                         float previousValueY = lastTwoFingerScrollPositionY;
                         for (int i = 0; i < event.getHistorySize(); i++) {
-                            accumX += event.getHistoricalX(i) - previousValueX;
+                            accumX -= event.getHistoricalX(i) - previousValueX;
                             accumY += event.getHistoricalY(i) - previousValueY;
 
                             previousValueX = event.getHistoricalX(0);
@@ -1580,8 +1580,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                         }
 
                         accumY += event.getY(0) - previousValueY;
+                        accumX -= event.getX(0) - previousValueX;
 
                         conn.sendMouseHighResScroll((short)(accumY * 3));
+                        conn.sendMouseHighResHScroll((short)(accumX * 3));
 
                         lastTwoFingerScrollPositionY = event.getY(0);
                         lastTwoFingerScrollPositionX = event.getX(0);
