@@ -62,6 +62,7 @@ import android.os.IBinder;
 import android.util.Rational;
 import android.view.Display;
 import android.view.InputDevice;
+import android.view.KeyCharacterMap;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.Surface;
@@ -253,7 +254,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
         View backgroundTouchView = findViewById(R.id.backgroundTouchView);
         backgroundTouchView.setOnTouchListener(this);
 
-        boolean needsInputBatching = false;
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             // Request unbuffered input event dispatching for all input classes we handle here.
             // Without this, input events are buffered to be delivered in lock-step with VBlank,
@@ -272,10 +272,6 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                     InputDevice.SOURCE_CLASS_POSITION | // Touchpads
                     InputDevice.SOURCE_CLASS_TRACKBALL // Mice (pointer capture)
             );
-
-            // Since the OS isn't going to batch for us, we have to batch mouse events to
-            // avoid triggering a bug in GeForce Experience that can lead to massive latency.
-            needsInputBatching = true;
         }
 
         notificationOverlayView = findViewById(R.id.notificationOverlay);
@@ -481,14 +477,14 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 .setAudioEncryption(true)
                 .setColorSpace(decoderRenderer.getPreferredColorSpace())
                 .setColorRange(decoderRenderer.getPreferredColorRange())
+                .setPersistGamepadsAfterDisconnect(!prefConfig.multiController)
                 .build();
 
         // Initialize the connection
         conn = new NvConnection(getApplicationContext(),
                 new ComputerDetails.AddressTuple(host, port),
                 httpsPort, uniqueId, config,
-                PlatformBinding.getCryptoProvider(this), serverCert,
-                needsInputBatching);
+                PlatformBinding.getCryptoProvider(this), serverCert);
         controllerHandler = new ControllerHandler(this, conn, this, prefConfig);
         keyboardTranslator = new KeyboardTranslator();
 
@@ -1310,20 +1306,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             handled = controllerHandler.handleButtonDown(event);
         }
 
+        // Try the keyboard handler if it wasn't handled as a game controller
         if (!handled) {
-            // Try the keyboard handler
-            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
-            if (translated == 0) {
-                return false;
-            }
-
             // Let this method take duplicate key down events
             if (handleSpecialKeys(event.getKeyCode(), true)) {
-                return true;
-            }
-
-            // Eat repeat down events
-            if (event.getRepeatCount() > 0) {
                 return true;
             }
 
@@ -1332,11 +1318,31 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return false;
             }
 
-            byte modifiers = getModifierState(event);
-            if (KeyboardTranslator.needsShift(event.getKeyCode())) {
-                modifiers |= KeyboardPacket.MODIFIER_SHIFT;
+            // We'll send it as a raw key event if we have a key mapping, otherwise we'll send it
+            // as UTF-8 text (if it's a printable character).
+            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
+            if (translated == 0) {
+                // Make sure it has a valid Unicode representation and it's not a dead character
+                // (which we don't support). If those are true, we can send it as UTF-8 text.
+                //
+                // NB: We need to be sure this happens before the getRepeatCount() check because
+                // UTF-8 events don't auto-repeat on the host side.
+                int unicodeChar = event.getUnicodeChar();
+                if ((unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0) {
+                    conn.sendUtf8Text(""+(char)unicodeChar);
+                    return true;
+                }
+
+                return false;
             }
-            conn.sendKeyboardInput(translated, KeyboardPacket.KEY_DOWN, modifiers);
+
+            // Eat repeat down events
+            if (event.getRepeatCount() > 0) {
+                return true;
+            }
+
+            conn.sendKeyboardInput(translated, KeyboardPacket.KEY_DOWN, getModifierState(event),
+                    keyboardTranslator.hasNormalizedMapping(event.getKeyCode(), event.getDeviceId()) ? 0 : MoonBridge.SS_KBE_FLAG_NON_NORMALIZED);
         }
 
         return true;
@@ -1380,13 +1386,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             handled = controllerHandler.handleButtonUp(event);
         }
 
+        // Try the keyboard handler if it wasn't handled as a game controller
         if (!handled) {
-            // Try the keyboard handler
-            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
-            if (translated == 0) {
-                return false;
-            }
-
             if (handleSpecialKeys(event.getKeyCode(), false)) {
                 return true;
             }
@@ -1396,13 +1397,40 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return false;
             }
 
-            byte modifiers = getModifierState(event);
-            if (KeyboardTranslator.needsShift(event.getKeyCode())) {
-                modifiers |= KeyboardPacket.MODIFIER_SHIFT;
+            short translated = keyboardTranslator.translate(event.getKeyCode(), event.getDeviceId());
+            if (translated == 0) {
+                // If we sent this event as UTF-8 on key down, also report that it was handled
+                // when we get the key up event for it.
+                int unicodeChar = event.getUnicodeChar();
+                return (unicodeChar & KeyCharacterMap.COMBINING_ACCENT) == 0 && (unicodeChar & KeyCharacterMap.COMBINING_ACCENT_MASK) != 0;
             }
-            conn.sendKeyboardInput(translated, KeyboardPacket.KEY_UP, modifiers);
+
+            conn.sendKeyboardInput(translated, KeyboardPacket.KEY_UP, getModifierState(event),
+                    keyboardTranslator.hasNormalizedMapping(event.getKeyCode(), event.getDeviceId()) ? 0 : MoonBridge.SS_KBE_FLAG_NON_NORMALIZED);
         }
 
+        return true;
+    }
+
+    @Override
+    public boolean onKeyMultiple(int keyCode, int repeatCount, KeyEvent event) {
+        return handleKeyMultiple(event) || super.onKeyMultiple(keyCode, repeatCount, event);
+    }
+
+    private boolean handleKeyMultiple(KeyEvent event) {
+        // We can receive keys from a software keyboard that don't correspond to any existing
+        // KEYCODE value. Android will give those to us as an ACTION_MULTIPLE KeyEvent.
+        //
+        // Despite the fact that the Android docs say this is unused since API level 29, these
+        // events are still sent as of Android 13 for the above case.
+        //
+        // For other cases of ACTION_MULTIPLE, we will not report those as handled so hopefully
+        // they will be passed to us again as regular singular key events.
+        if (event.getKeyCode() != KeyEvent.KEYCODE_UNKNOWN || event.getCharacters() == null) {
+            return false;
+        }
+
+        conn.sendUtf8Text(event.getCharacters());
         return true;
     }
 
@@ -1575,6 +1603,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 if (event.getActionMasked() == MotionEvent.ACTION_SCROLL) {
                     // Send the vertical scroll packet
                     conn.sendMouseHighResScroll((short)(event.getAxisValue(MotionEvent.AXIS_VSCROLL) * 120));
+                    conn.sendMouseHighResHScroll((short)(event.getAxisValue(MotionEvent.AXIS_HSCROLL) * 120));
                 }
 
                 if ((changedButtons & MotionEvent.BUTTON_PRIMARY) != 0) {
@@ -1903,7 +1932,7 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public boolean onTouch(View view, MotionEvent event) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             if (event.getAction() == MotionEvent.ACTION_DOWN) {
                 // Tell the OS not to buffer input events for us
                 //
@@ -2163,9 +2192,9 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void setHdrMode(boolean enabled) {
+    public void setHdrMode(boolean enabled, byte[] hdrMetadata) {
         LimeLog.info("Display HDR mode: " + (enabled ? "enabled" : "disabled"));
-        decoderRenderer.setHdrMode(enabled);
+        decoderRenderer.setHdrMode(enabled, hdrMetadata);
     }
 
     @Override
@@ -2278,8 +2307,13 @@ public class Game extends Activity implements SurfaceHolder.Callback,
     }
 
     @Override
-    public void mouseScroll(byte amount) {
+    public void mouseVScroll(byte amount) {
         conn.sendMouseScroll(amount);
+    }
+
+    @Override
+    public void mouseHScroll(byte amount) {
+        conn.sendMouseHScroll(amount);
     }
 
     @Override
@@ -2292,10 +2326,10 @@ public class Game extends Activity implements SurfaceHolder.Callback,
             }
 
             if (buttonDown) {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_DOWN, getModifierState());
+                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_DOWN, getModifierState(), (byte)0);
             }
             else {
-                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_UP, getModifierState());
+                conn.sendKeyboardInput(keyMap, KeyboardPacket.KEY_UP, getModifierState(), (byte)0);
             }
         }
     }
@@ -2354,6 +2388,8 @@ public class Game extends Activity implements SurfaceHolder.Callback,
                 return handleKeyDown(keyEvent);
             case KeyEvent.ACTION_UP:
                 return handleKeyUp(keyEvent);
+            case KeyEvent.ACTION_MULTIPLE:
+                return handleKeyMultiple(keyEvent);
             default:
                 return false;
         }
